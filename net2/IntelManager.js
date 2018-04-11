@@ -25,7 +25,7 @@ const sysManager = new SysManager('info');
 const rclient = require('../util/redis_manager.js').getRedisClient()
 
 const bone = require("../lib/Bone.js");
-const IntelTool = new require('./IntelTool');
+const IntelTool = require('./IntelTool');
 const intelTool = new IntelTool();
 
 const A_WEEK = 3600 * 24 * 7;
@@ -97,7 +97,7 @@ module.exports = class {
   
   
       if (!intel) {
-        log.info("No intel for domain", domain, "from cache, look up Bone");
+        log.info("No intel for domain", domain, "from cache, look up Bone...");
         intel = await this._lookupDomain(domain, ip);
         log.info(`Intel from bone for domain ${domain} is`, intel);
         if (intel) {
@@ -154,7 +154,11 @@ module.exports = class {
         }
 
         if(info.c) {
-          intel.category = info.c;
+          if (Array.isArray(info.c)) {
+            intel.category = info.c[0];  
+          } else {
+            intel.category = info.c;
+          }
         }
 
         if(info.action && info.action.block) {
