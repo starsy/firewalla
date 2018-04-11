@@ -597,7 +597,7 @@ module.exports = class DNSMASQ {
       
       writer.on('error', err => {
         reject(err);
-      });
+      }); 
 
       let targetIP = BLACK_HOLE_IP
 
