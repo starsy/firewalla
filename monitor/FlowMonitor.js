@@ -914,9 +914,9 @@ module.exports = class FlowMonitor {
 
     let iobj;
     try {
-      iobj = await intelManager.lookupDomain(domain, remoteIp, flowObj.intel);
+      iobj = await intelManager.lookupDomain(domain, remoteIP, flowObj.intel);
     } catch (err) {
-      log.error("Error when lookup intel for domain:", domain, deviceIP, remoteIP);
+      log.error("Error when lookup intel for domain:", domain, deviceIP, remoteIP, err);
       return;
     }
 
