@@ -207,12 +207,14 @@ module.exports = class DNSMASQ {
       this.oldResolvConf = config;
     }
 
-    setTimeout(this.updateResolvConf.bind(this), 20000);
     try {
+      log.info('pkill -SIGHUP dnsmasq"');
       await execAsync("pkill -SIGHUP dnsmasq");
     } catch (err) {
       // ignore error if dnsmasq not exists 
     }
+
+    setTimeout(this.updateResolvConf.bind(this), 60000);
   }
 
   async updateFilter(type, force) {
@@ -660,6 +662,7 @@ module.exports = class DNSMASQ {
     this.counter.reloadDnsmasq ++;
     log.info("start to reload dnsmasq (-HUP):", this.counter.reloadDnsmasq);
     try {
+      log.info('sudo systemctl reload firemasq');
       await execAsync('sudo systemctl reload firemasq');
     } catch (err) {
       log.error("Unable to reload firemasq service", err, {});
