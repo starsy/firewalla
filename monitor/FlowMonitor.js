@@ -982,7 +982,7 @@ module.exports = class FlowMonitor {
       "p.dest.name": domain,
       "p.dest.port": this.getRemotePort(flowObj),
       "p.security.reason": reason,
-      "p.security.numOfReportSources": 1,
+      "p.security.numOfReportSources": "Firewalla's global security intel",
       "p.local_is_client": (flowObj.fd === 'in' ? 1 : 0)
     });
 
@@ -991,6 +991,7 @@ module.exports = class FlowMonitor {
     }
     
     alarm['p.security.category'] = [_category];
+    alarm['p.alarm.trigger'] = 'domain';
     
     if (intel.tags) {
       alarm['p.security.tags'] = intel.tags;
@@ -1064,6 +1065,8 @@ module.exports = class FlowMonitor {
       if (iobj.tags) {
         alarm['p.security.tags'] = iobj.tags;
       }
+
+      alarm['p.alarm.trigger'] = 'ip';
 
       log.info("Host:ProcessIntelFlow:Alarm", alarm);
 
