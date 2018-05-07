@@ -177,6 +177,7 @@ module.exports = class DNSMASQ {
   }
 
   async updateResolvConf() {
+    log.info("In updateResolvConf()");
     let nameservers = this.getAllDefaultNameServers()
     if (!nameservers || nameservers.length === 0) {
       nameservers = sysManager.myDNS();
@@ -189,7 +190,7 @@ module.exports = class DNSMASQ {
     let entries = nameservers.filter(x => x && !(x.trim().match(/^127\.|^::1|^localhost/)))
       .map(ip => "nameserver " + ip);
 
-    entries.unshift(`nameserver ${DEFAULT_DNS_SERVER}`);
+    entries.push(`nameserver ${DEFAULT_DNS_SERVER}`);
 
     let config = entries.join('\n');
     config += "\n";
@@ -357,9 +358,10 @@ module.exports = class DNSMASQ {
   }
 
   setDefaultNameServers(key, ips) {
+    log.info("Set default name servers for key:", key, ", ips:", ips);
     let _ips;
     if (Array.isArray(ips)) {
-      _ips = ips.filter(validator.isIP);
+      _ips = ips.filter(x => validator.isIP(x));
     } else {
       if (!validator.isIP(ips.toString())) {
         return;
@@ -367,6 +369,7 @@ module.exports = class DNSMASQ {
       _ips = [ips.toString()];
     }
     defaultNameServers[key] = _ips;
+    log.info("Default name servers:", defaultNameServers);
   }
 
   unsetDefaultNameServers(key) {
@@ -381,7 +384,8 @@ module.exports = class DNSMASQ {
         Array.prototype.push.apply(list, ips);
       }
     });
-    return list
+    log.info("All the default name servers:", list);
+    return list;
   }
 
   async delay(t) {
