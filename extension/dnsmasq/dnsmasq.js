@@ -750,7 +750,8 @@ module.exports = class DNSMASQ {
     if(upstreamDNS) {
       log.info("upstream server", upstreamDNS, "is specified");
       cmd = util.format("%s --server=%s --no-resolv", cmd, upstreamDNS);
-      cmdAlt = util.format("%s --server=%s --no-resolv", cmdAlt, upstreamDNS);
+      if(cmdAlt) 
+        cmdAlt = util.format("%s --server=%s --no-resolv", cmdAlt, upstreamDNS);
     }
 
     this.writeStartScript(cmd, cmdAlt);
@@ -1009,6 +1010,7 @@ module.exports = class DNSMASQ {
   async statusCheck() {
     log.info("Keep-alive checking dnsmasq status")
     let checkResult = await this.verifyDNSConnectivity() ||
+      await this.verifyDNSConnectivity() ||
       await this.verifyDNSConnectivity() ||
       await this.verifyDNSConnectivity();
 

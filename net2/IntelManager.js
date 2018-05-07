@@ -96,7 +96,7 @@ module.exports = class {
       let intel = flowObj.intel;
 
       if (!intel.category) {
-        log.info("No intel for domain", domain, "look up Bone...");
+        log.info("No intel for domain", domain, "look up from cloud...");
         intel = await this._lookupDomain(domain, ip);
       } else {
         log.info("Intel for domain", domain, " exists in flowObj");
@@ -118,27 +118,6 @@ module.exports = class {
       log.info("Ignore check for domain:", target, " is", data);
       return data && data.ignore;
     }
-
-    getDomainIntelKey(domain) {
-      return `intel:domain:${domain}`;
-    }
-      
-    async cacheDomainIntelAdd(domain, intel) {
-      if (!domain || !intel) {
-        return;
-      }
-      let key = this.getDomainIntelKey(domain);
-      log.info("Domain intel key is", key);
-      
-      await rclient.hmsetAsync(key, intel);
-      await rclient.expireatAsync(key, this.currentTime() + A_WEEK);
-      
-      log.info("Save cache success", key, "=>", intel);
-    }
-
-    async cacheDomainIntelLookup(domain) {
-      return await rclient.hgetallAsync(this.getDomainIntelKey(domain));
-    }
     
     async _lookupDomain(domain, ip) {
       let cloudIntel;
@@ -147,7 +126,7 @@ module.exports = class {
       } catch (err) {
         log.info("Error when check intel from cloud", err);
       }
-      log.info("Bone intel for ", domain, "is: ", cloudIntel);
+      log.info("Cloud intel for ", domain, "is: ", cloudIntel);
 
       return this.processCloudIntel(cloudIntel[0]);
     }
@@ -351,34 +330,36 @@ module.exports = class {
             // Authorization: 'Token dc30fcd03eddbd95b90bacaea5e5a44b1b60d2f5',
         };
 
-        request(options, (err, httpResponse, body) => {
-            if (err != null) {
-                let stack = new Error().stack;
-                log.info("Error while requesting ", err, stack);
-                callback(err, null, null);
+        request(options, (err, resp, body) => {
+            if (err) {
+                log.warn(`Error while requesting ${weburl}`, err);
+                callback(null, null);
                 return;
             }
-            if (httpResponse == null) {
-                let stack = new Error().stack;
-                log.info("Error while response ", err, stack);
-                callback(500, null, null);
+            if (!resp) {
+                log.warn(`Error - null response from ${weburl}`);
+                callback(null, null);
                 return;
             }
-            if (httpResponse.statusCode < 200 ||
-                httpResponse.statusCode > 299) {
-                log.error("**** Error while response HTTP ", httpResponse.statusCode);
-                callback(httpResponse.statusCode, null, null);
+            if (resp.statusCode < 200 || resp.statusCode > 299) {
+                log.warn("Error in response code", resp.statusCode);
+                callback(null, null);
                 return;
             }
-            if (err === null && body != null) {
+            if (body) {
+              let obj;
+              try {
+                obj = JSON.parse(body);
+              } catch (err) {
+                log.error("Error when parse ip info:", body, err);
+              }
+              if (obj) {
                 this.cacheAdd(ip, "ipinfo", body);
-                let obj = JSON.parse(body);
-                if (obj != null) {
-                    callback(null,obj);
-                } else {
-                    callback(null,null);
-                }
+                callback(null, obj);
+                return;
+              }
             }
+            callback(null, null);
         });
       });
     }
@@ -392,7 +373,7 @@ module.exports = class {
             family: 4
         };
 
-        this._location(ip, (err,lobj)=>{
+        this._location(ip, (err, lobj)=>{
             let obj = {lobj};
             log.info("Intel:Location",ip,lobj);
             obj = this._packageIntel(ip,obj,intel);
