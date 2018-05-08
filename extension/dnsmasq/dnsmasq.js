@@ -387,6 +387,20 @@ module.exports = class DNSMASQ {
     log.info("All the default name servers:", list);
     return list;
   }
+  
+  async getCurrentNameServerList() {
+    let cmd = `grep 'nameserver' ${resolvFile} | head -n 1 | cut -d ' ' -f 2`;
+    log.info("Command to get current name server: ", cmd);
+
+    let {stdout, stderr} = await execAsync(cmd);
+    
+    if (!stdout || stdout === '') {
+      return [];
+    }
+
+    let list = stdout.split('\n');
+    return list.filter((x, i) => list.indexOf(x) === i);
+  }
 
   async delay(t) {
     return new Promise(resolve => setTimeout(resolve, t));
