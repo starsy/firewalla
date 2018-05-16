@@ -73,6 +73,7 @@ let DEFAULT_DNS_SERVER = (fConfig.dns && fConfig.dns.defaultDNSServer) || "8.8.8
 let RELOAD_INTERVAL = 3600 * 24 * 1000; // one day
 
 let statusCheckTimer = null;
+let updateResolvTimer = null;
 
 module.exports = class DNSMASQ {
   constructor(loglevel) {
@@ -215,7 +216,9 @@ module.exports = class DNSMASQ {
       // ignore error if dnsmasq not exists 
     }
 
-    setTimeout(this.updateResolvConf.bind(this), 60000);
+    if (!updateResolvTimer) {
+      updateResolvTimer = setInterval(this.updateResolvConf.bind(this), 60000);
+    } 
   }
 
   async updateFilter(type, force) {
@@ -393,12 +396,15 @@ module.exports = class DNSMASQ {
     log.info("Command to get current name server: ", cmd);
 
     let {stdout, stderr} = await execAsync(cmd);
+
+    log.info("Execution result:", stdout);
     
     if (!stdout || stdout === '') {
       return [];
     }
 
     let list = stdout.split('\n');
+    log.info("List:", list);
     return list.filter((x, i) => list.indexOf(x) === i);
   }
 
