@@ -18,7 +18,9 @@ let instance = null;
 
 const log = require('./logger.js')(__filename);
 
+const Promise = require('bluebird');
 const request = require('request');
+const rp = require('request-promise');
 const SysManager = require('./SysManager.js');
 const sysManager = new SysManager('info');
 
@@ -59,7 +61,13 @@ module.exports = class {
     }
 
     async cacheLookupAsync(dest, origin) {
-        return await rclient.getAsync("cache.intel:" + origin + ":" + dest);
+      let result;
+      try {
+        result = await rclient.getAsync("cache.intel:" + origin + ":" + dest);
+      } catch (err) {
+        // null
+      }
+      return result;
     }
 
     cachelookup(ip, origin, callback) {
@@ -176,41 +184,35 @@ module.exports = class {
     return intel;
   }
 
-  lookup(ip, intel, callback) {
-        if (!ip || ip === "8.8.8.8" || sysManager.isLocalIP(ip)) {
-            callback(null, null, null);
-            return;
+    async lookup(ip, intel) {
+      if (!ip || ip === "8.8.8.8" || sysManager.isLocalIP(ip)) {
+        return;
+      }
+
+      let data = await rclient.hgetallAsync("intel:action:" + ip);
+      if (data && data.ignore) {
+        log.info("Intel:Lookup:Ignored", ip);
+        return;
+      }
+
+      let result = await this.cacheLookupAsync(ip, "cymon");
+      if (result && result !== "none") {
+        let lobj = await this._location(ip);
+        let obj = JSON.parse(result);
+        if (!obj || obj.count === 0) {
+          obj = {}
+          obj.lobj = lobj;
+          obj = this._packageIntel(ip, obj, intel);
+          return obj;
+        } else {
+          obj.lobj = lobj;
+          log.info("Intel:Location", ip, obj.lobj);
+          this._packageCymon(ip, obj);
+          return obj;
         }
-
-        rclient.hgetall("intel:action:"+ip, (err,data) => {
-            if (data && data.ignore) {
-                log.info("Intel:Lookup:Ignored",ip);
-                callback(null,null,null);
-            }
-
-            this.cachelookup(ip, "cymon", (err, result) => {
-                if (result && result !== "none") {
-                    this._location(ip, (err, lobj)=>{
-                        let obj = JSON.parse(result);
-                        if (!obj || obj.count === 0) {
-                            obj = {}
-                            obj.lobj = lobj;
-                            obj = this._packageIntel(ip, obj, intel);
-                            callback(null, obj); 
-                        } else {
-                            obj.lobj = lobj;
-                            log.info("Intel:Location",ip,obj.lobj);
-                            this._packageCymon(ip, obj);
-                            callback(err, obj);
-                        }
-                    });
-                } else {
-                    this._lookup(ip, intel, (err, obj)=>{
-                        callback(err,obj);
-                    });
-                }
-            });
-        });
+      } else {
+        return await this._lookup(ip, intel);
+      }
     }
 
     _packageIntel(ip, obj, intel) {
@@ -240,7 +242,6 @@ module.exports = class {
         log.info("IntelManger:PackageIntel:Done",ip,JSON.stringify(intel,null,2),JSON.stringify(obj,null,2));
         return obj;
     }
-
     
     _packageCymon(ip, obj) {
         let weburl = "https://cymon.io/" + ip;
@@ -314,104 +315,101 @@ module.exports = class {
   "org": "AS21740 eNom, Incorporated",
   "postal": "98033"
  */
-    _location(ip, callback) {
-      log.info("Looking up location:",ip);
-      this.cachelookup(ip, "ipinfo", (err,data)=>{
-        if (data!=null) {
-            callback(null, JSON.parse(data));
-            return;
-        }
-        let weburl = "https://ipinfo.io/" + ip;
+  async _location(ip) {
+    log.info("Looking up location:", ip);
 
-        var options = {
-            uri: weburl,
-            method: 'GET',
-            family: 4
-            // Authorization: 'Token dc30fcd03eddbd95b90bacaea5e5a44b1b60d2f5',
-        };
+    let cached = await this.cacheLookupAsync(ip, "ipinfo");
 
-        request(options, (err, resp, body) => {
-            if (err) {
-                log.warn(`Error while requesting ${weburl}`, err);
-                callback(null, null);
-                return;
-            }
-            if (!resp) {
-                log.warn(`Error - null response from ${weburl}`);
-                callback(null, null);
-                return;
-            }
-            if (resp.statusCode < 200 || resp.statusCode > 299) {
-                log.warn("Error in response code", resp.statusCode);
-                callback(null, null);
-                return;
-            }
-            if (body) {
-              let obj;
-              try {
-                obj = JSON.parse(body);
-              } catch (err) {
-                log.error("Error when parse ip info:", body, err);
-              }
-              if (obj) {
-                this.cacheAdd(ip, "ipinfo", body);
-                callback(null, obj);
-                return;
-              }
-            }
-            callback(null, null);
-        });
-      });
+    if (cached) {
+      return JSON.parse(cached);
     }
 
-    _lookup(ip, intel, callback) {
-        let url = "https://cymon.io/api/nexus/v1/ip/" + ip + "/events?limit=100";
+    let ipinfo = await Promise.join(
+      this._ipInfoFromBone(ip),
+      this._ipInfoFromIpinfo(ip),
+      (info1, info2) => Object.assign(info1 ? info1 : {}, info2)
+    );
+    
+    log.info("Merged ipinfo is:", ipinfo);
 
-        let options = {
-            uri: url,
-            method: 'GET',
-            family: 4
-        };
+    this.cacheAdd(ip, "ipinfo", JSON.stringify(ipinfo));
+    
+    return ipinfo;
+  }
 
-        this._location(ip, (err, lobj)=>{
-            let obj = {lobj};
-            log.info("Intel:Location",ip,lobj);
-            obj = this._packageIntel(ip,obj,intel);
-            request(options, (err, resp, body) => {
-                if (err) {
-                    log.info(`Error while requesting ${url}`, err);
-                    callback(err, null, null);
-                    return;
-                }
-                if (!resp) {
-                    log.info("Error while response ", err);
-                    callback(500, null, null);
-                    return;
-                }
-                if (resp.statusCode < 200 || resp.statusCode > 299) {
-                    log.error("**** Error while response HTTP ", resp.statusCode);
-                    callback(resp.statusCode, null, null);
-                    return;
-                }
-                if (body) {
-                    this.cacheAdd(ip, "cymon", body);
-                    let cobj = JSON.parse(body);
-                    if (cobj) {
-                        if (cobj.count === 0) {
-                            log.info("INFO:====== No Intel Information!!", ip, obj);
-                            callback(null,obj);
-                        } else {
-                            cobj.lobj = lobj;
-                            this._packageCymon(ip, cobj);
-                            callback(err, cobj, cobj.weburl);
-                        }
-                    } else {
-                        callback(null,obj);
-                    }
-                } else {
-                    callback(null,obj);
-                }
-            });
-        });
+  static async _ipInfoFromBone(ip) {
+      let result = await bone.intelFinger(ip);
+      if (result) {
+        log.info("ipInfo from bone is:", result.ipinfo);
+        return result.ipinfo;
+      }
+      log.info("ipInfo from bone is:", null);
+      return null;
     }
+
+  async _ipInfoFromIpinfo(ip) {
+    const options = {
+      uri: "https://ipinfo.io/" + ip,
+      method: 'GET',
+      family: 4
+      // Authorization: 'Token dc30fcd03eddbd95b90bacaea5e5a44b1b60d2f5',
+    };
+
+    let body, result;
+    try {
+      body = await rp(options);
+    } catch (err) {
+      log.error("Error while requesting", options.uri, err);
+      return;
+    }
+
+    try {
+      result = JSON.parse(body);
+    } catch (err) {
+      log.error("Error when parse body:", body, err);
+    }
+
+    log.info("ipInfo from ipinfo is:", result);
+    return result;
+  }
+
+  async _lookup(ip, intel) {
+    let url = "https://cymon.io/api/nexus/v1/ip/" + ip + "/events?limit=100";
+
+    let options = {
+      uri: url,
+      method: 'GET',
+      family: 4
+    };
+
+    let lobj = await this._location(ip);
+
+    let obj = {lobj};
+    log.info("Intel:Location", ip, lobj);
+    obj = this._packageIntel(ip, obj, intel);
+
+    let body;
+    try {
+      body = await rp(options);
+    } catch (err) {
+      log.info(`Error while requesting ${url}`, err);
+      
+    }
+
+    this.cacheAdd(ip, "cymon", body);
+    
+    let cobj = JSON.parse(body);
+    if (cobj) {
+      if (cobj.count === 0) {
+        log.info("INFO:====== No Intel Information!!", ip, obj);
+        return obj;
+      } else {
+        cobj.lobj = lobj;
+        this._packageCymon(ip, cobj);
+        return cobj;
+      }
+    } else {
+      return obj;
+    }
+  }
 }
