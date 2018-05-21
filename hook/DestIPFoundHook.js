@@ -28,9 +28,6 @@ const f = require("../net2/Firewalla.js")
 
 let Promise = require('bluebird');
 
-let async = require('asyncawait/async');
-let await = require('asyncawait/await');
-
 let DNSManager = require('../net2/DNSManager.js');
 let dnsManager = new DNSManager('info');
 
@@ -40,11 +37,17 @@ let intelTool = new IntelTool();
 let flowUtil = require('../net2/FlowUtil.js');
 const util = require('util');
 
+const CategoryUpdater = require('../control/CategoryUpdater.js')
+const categoryUpdater = new CategoryUpdater()
+
 let IP_SET_TO_BE_PROCESSED = "ip_set_to_be_processed";
 
 let ITEMS_PER_FETCH = 100;
 let QUEUE_SIZE_PAUSE = 2000;
 let QUEUE_SIZE_RESUME = 1000;
+
+const TRUST_THRESHOLD = 10 // to be updated
+
 
 let MONITOR_QUEUE_SIZE_INTERVAL = 10 * 1000; // 10 seconds;
 
@@ -83,6 +86,13 @@ class DestIPFoundHook extends Hook {
       /\.firewalla\.com$/];
 
     return patterns.filter(p => host.match(p)).length > 0;
+  }
+
+  // TBD
+  // select the best fit intel from intel results from cloud
+
+  selectIntel(intels) {
+
   }
 
   aggregateIntelResult(ip, sslInfo, dnsInfo, cloudIntelInfos) {
@@ -129,7 +139,17 @@ class DestIPFoundHook extends Hook {
         }
       }
 
+      // always try to use the general domain pattern with same category
+      // a.b.c.d => porn
+      // b.c.d => porn
+      // c.d => search engine
+      //
+      // 'b.c.d => porn' should be used
+
       if(info.c) {
+        if(intel.category && info.c === intel.category) { // ignore if they are same category
+          return
+        }
         intel.category = info.c;
       }
 
@@ -148,8 +168,19 @@ class DestIPFoundHook extends Hook {
       if(info.cc) {
         intel.cc = info.cc;
       }
+
+      if(info.originIP) {
+        intel.originIP = info.originIP
+      }
       //      }
     });
+
+    const domains = this.getDomains(sslInfo, dnsInfo);
+
+    if(intel.originIP && !domains.includes(intel.originIP)) {
+      // it's a pattern
+      intel.isOriginIPAPattern = true
+    }
 
     return intel;
   }
@@ -178,6 +209,16 @@ class DestIPFoundHook extends Hook {
   //   }
   // }
 
+  async updateCategoryDomain(intel) {
+    if(intel.category && intel.t > TRUST_THRESHOLD) {
+      if(intel.originIP) {
+        await categoryUpdater.updateDomain(intel.category, intel.originIP, intel.isOriginIPAPattern)
+      } else {
+        await categoryUpdater.updateDomain(intel.category, intel.host)
+      }
+    }
+  }
+
   processIP(flow, options) {
     let ip = null;
     let fd = 'in';
@@ -202,21 +243,25 @@ class DestIPFoundHook extends Hook {
     let skipRedisUpdate = options.skipUpdate;
     let forceRedisUpdate = options.forceUpdate;
 
-    return async(() => {
+    return (async() => {
 
       if(!skipRedisUpdate && !forceRedisUpdate) {
-        let result = await (intelTool.intelExists(ip));
+        let result = await intelTool.intelExists(ip);
 
         if (result) {
           result.cached = true;
+          const intel = await intelTool.getIntel(ip)
+
+          await this.updateCategoryDomain(intel)
+
           return result;
         }
       }
 
       log.info("Found new IP " + ip + " fd " +fd+ " flow "+flow+", checking intels...");
 
-      let sslInfo = await (intelTool.getSSLCertificate(ip));
-      let dnsInfo = await (intelTool.getDNS(ip));
+      let sslInfo = await intelTool.getSSLCertificate(ip);
+      let dnsInfo = await intelTool.getDNS(ip);
 
       let domains = this.getDomains(sslInfo, dnsInfo);
       let ips = [ip];
@@ -225,7 +270,7 @@ class DestIPFoundHook extends Hook {
 
       // ignore if domain contain firewalla domain
       if(domains.filter(d => this.isFirewalla(d)).length === 0) {
-        cloudIntelInfo = await (intelTool.checkIntelFromCloud(ips, domains, fd));
+        cloudIntelInfo = await intelTool.checkIntelFromCloud(ips, domains, fd);
       }
 
       // Update intel dns:ip:xxx.xxx.xxx.xxx so that legacy can use it for better performance
@@ -234,8 +279,11 @@ class DestIPFoundHook extends Hook {
 
       // this.workaroundIntelUpdate(aggrIntelInfo);
 
+      // update category pool if necessary
+      await this.updateCategoryDomain(aggrIntelInfo)
+
       if(!skipRedisUpdate) {
-        await (intelTool.addIntel(ip, aggrIntelInfo, this.config.intelExpireTime));
+        await intelTool.addIntel(ip, aggrIntelInfo, this.config.intelExpireTime);
       }
 
       log.info("Check intel successful for IP " + ip);
@@ -250,8 +298,10 @@ class DestIPFoundHook extends Hook {
   }
 
   job() {
-    return async(() => {
-      let ips = await (rclient.zrangeAsync(IP_SET_TO_BE_PROCESSED, 0, ITEMS_PER_FETCH));
+    return (async () => {
+      log.debug("Checking if any IP Addresses pending for intel analysis...")
+
+      let ips = await rclient.zrangeAsync(IP_SET_TO_BE_PROCESSED, 0, ITEMS_PER_FETCH);
 
       if(ips.length > 0) {
         //let result = Promise.map(ips, ip => ({ip, intel: await(this.processIP(ip))}), {concurrency: 5} );
@@ -285,6 +335,7 @@ class DestIPFoundHook extends Hook {
         const success = ipsWithIntel.length;
 
         log.debug(`Analyzed ${total} IP Addresses for intels, ${success} successful, ${cached} is cached, ${total - success} failed`);
+        await rclient.zremAsync(args)
 
         // add failed ip back into discover queue
         const ipsFail = result.filter(o => !o.intel);
@@ -295,7 +346,7 @@ class DestIPFoundHook extends Hook {
         // log.info("No IP Addresses are pending for intels");
       }
 
-      await (delay(1000)); // sleep for only 1 second
+      await delay(1000); // sleep for only 1 second
 
       return this.job();
     })();
@@ -328,6 +379,10 @@ class DestIPFoundHook extends Hook {
       this.appendNewFlow(ip,fd);
     });
 
+    sem.on('DestIP', (event) => {
+      this.processIP(event.ip)
+    })
+
     this.job();
 
     setInterval(() => {
@@ -336,8 +391,8 @@ class DestIPFoundHook extends Hook {
   }
 
   monitorQueue() {
-    return async(() => {
-      let count = await (rclient.zcountAsync(IP_SET_TO_BE_PROCESSED, "-inf", "+inf"));
+    return (async () => {
+      let count = await rclient.zcountAsync(IP_SET_TO_BE_PROCESSED, "-inf", "+inf")
       if(count > QUEUE_SIZE_PAUSE) {
         this.paused = true;
       }

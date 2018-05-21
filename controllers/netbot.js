@@ -42,6 +42,9 @@ let vpnManager = new VpnManager('info');
 let IntelManager = require('../net2/IntelManager.js');
 let intelManager = new IntelManager('debug');
 
+const CategoryUpdater = require('../control/CategoryUpdater.js')
+const categoryUpdater = new CategoryUpdater()
+
 let DeviceMgmtTool = require('../util/DeviceMgmtTool');
 
 const Promise = require('bluebird');
@@ -712,7 +715,7 @@ class netBot extends ControllerBot {
                const oldServer = json.oldServer
                const newServer = json.newServer
                
-               if(oldServer && newServer) {
+               if(oldServer && newServer && oldServer !== newServer) {
                  let notifyMsg = {
                    title: "Shadowsocks Failover",
                    body: `Shadowsocks server is switched from ${oldServer} to ${newServer}.`
@@ -1171,7 +1174,24 @@ class netBot extends ControllerBot {
   }
 
 
+  processAppInfo(appInfo) {
+    return async(() => {
+      if(appInfo.language) {
+        if(sysManager.language !== appInfo.language) {
+          await (sysManager.setLanguageAsync(appInfo.language))
+        }
+      }
 
+      if(appInfo.deviceName && appInfo.eid) {
+        const keyName = "sys:ept:memberNames"
+        await (rclient.hsetAsync(keyName, appInfo.eid, appInfo.deviceName))
+
+        const keyName2 = "sys:ept:member:lastvisit"
+        await (rclient.hsetAsync(keyName2, appInfo.eid, Math.floor(new Date() / 1000)))
+      }
+
+    })()
+  }
 
   getHandler(gid, msg, appInfo, callback) {
 
@@ -1179,6 +1199,10 @@ class netBot extends ControllerBot {
     if(typeof appInfo === 'function') {
       callback = appInfo;
       appInfo = undefined;
+    }
+
+    if(appInfo) {
+      this.processAppInfo(appInfo)
     }
 
     // mtype: get
@@ -1399,6 +1423,15 @@ class netBot extends ControllerBot {
           }
         })();
         break;
+      case "liveCategoryDomains":
+        (async () => {
+          const category = msg.data.value.category
+          const domains = await categoryUpdater.getDomainsWithExpireTime(category)
+          this.simpleTxData(msg, {domains: domains}, null, callback)
+        })().catch((err) => {
+          this.simpleTxData(msg, {}, err, callback)
+        })
+        break
     default:
         this.simpleTxData(msg, null, new Error("unsupported action"), callback);
     }
@@ -2457,6 +2490,10 @@ class netBot extends ControllerBot {
       log.info("Received jsondata from app", rawmsg.message, {});
       if (rawmsg.message.obj.type === "jsonmsg") {
         if (rawmsg.message.obj.mtype === "init") {
+
+          if(rawmsg.message.appInfo) {
+            this.processAppInfo(rawmsg.message.appInfo)
+          }
 
           log.info("Process Init load event");
 
