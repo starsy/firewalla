@@ -1011,7 +1011,7 @@ module.exports = class DNSMASQ {
 
   async verifyDNSConnectivity() {
     let cmd = `dig -4 +short -p 8853 @localhost www.google.com`
-    log.info("Verifying DNS connectivity...")
+    log.debug("Verifying DNS connectivity...")
 
     try {
       let {stdout, stderr} = await execAsync(cmd);
@@ -1022,7 +1022,7 @@ module.exports = class DNSMASQ {
         log.error("Got error output when verifying dns connectivity:", result.stderr, {})
         return false
       } else {
-        log.info("DNS connectivity looks good")
+        log.debug("DNS connectivity looks good")
         return true
       }
     } catch (err) {
@@ -1032,7 +1032,7 @@ module.exports = class DNSMASQ {
   }
 
   async statusCheck() {
-    log.info("Keep-alive checking dnsmasq status")
+    log.debug("Keep-alive checking dnsmasq status")
     let checkResult = await this.verifyDNSConnectivity() ||
       await this.verifyDNSConnectivity() ||
       await this.verifyDNSConnectivity() ||
