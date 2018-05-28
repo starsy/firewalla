@@ -211,7 +211,7 @@ class DestIPFoundHook extends Hook {
 
   async updateCategoryDomain(intel) {
     if(intel.category && intel.t > TRUST_THRESHOLD) {
-      if(intel.originIP) {
+      if(intel.originIP && intel.host) {
         await categoryUpdater.updateDomain(intel.category, intel.originIP, intel.isOriginIPAPattern)
       } else {
         await categoryUpdater.updateDomain(intel.category, intel.host)
@@ -301,54 +301,57 @@ class DestIPFoundHook extends Hook {
     return (async () => {
       log.debug("Checking if any IP Addresses pending for intel analysis...")
 
-      let ips = await rclient.zrangeAsync(IP_SET_TO_BE_PROCESSED, 0, ITEMS_PER_FETCH);
+      try {
+        let ips = await rclient.zrangeAsync(IP_SET_TO_BE_PROCESSED, 0, ITEMS_PER_FETCH);
 
-      if(ips.length > 0) {
-        //let result = Promise.map(ips, ip => ({ip, intel: await(this.processIP(ip))}), {concurrency: 5} );
-        log.debug(`There are ${ips.length} IP Addresses pending for intel analysis, checking...`);
+        if(ips.length > 0) {
+          //let result = Promise.map(ips, ip => ({ip, intel: await(this.processIP(ip))}), {concurrency: 5} );
+          log.debug(`There are ${ips.length} IP Addresses pending for intel analysis, checking...`);
 
-        let result = await (Promise.map(ips,
-            async (ip => {
-              const intel = await (this.processIP(ip));
-              return new Promise((resolve, reject) => resolve({ip, intel}));
-            }),
-            {concurrency: 5}));
+          let result = await Promise.map(ips,
+              (async ip => {
+                const intel = await (this.processIP(ip));
+                return new Promise((resolve, reject) => resolve({ip, intel}));
+              }),
+              {concurrency: 5});
 
-        await (Promise.all(result.map(o => o.intel)));
+          await Promise.all(result.map(o => o.intel));
 
-        //log.debug("Result: ", util.inspect(result, {depth: 10}), {});
+          //log.debug("Result: ", util.inspect(result, {depth: 10}), {});
 
-        let args = [IP_SET_TO_BE_PROCESSED];
+          let args = [IP_SET_TO_BE_PROCESSED];
 
-        const ipsWithIntel = result.filter(o => o.intel);
-        log.debug("IP has intel: ", util.inspect(ipsWithIntel, {depth: 10}));
+          const ipsWithIntel = result.filter(o => o.intel);
+          log.debug("IP has intel: ", util.inspect(ipsWithIntel, {depth: 10}));
 
-        if (ipsWithIntel.length > 0) {
-          args.push(...ipsWithIntel.map(o => o.ip));
-          //args.push.apply(args, ips);
-          log.debug("Args: ", args, {});
-          await (rclient.zremAsync(args));
+          if (ipsWithIntel.length > 0) {
+            args.push(...ipsWithIntel.map(o => o.ip));
+            //args.push.apply(args, ips);
+            log.debug("Args: ", args, {});
+            await (rclient.zremAsync(args));
+          }
+
+          const total = ips.length;
+          const cached = ipsWithIntel.filter(o => o.intel.cached).length;
+          const success = ipsWithIntel.length;
+
+          log.debug(`Analyzed ${total} IP Addresses for intels, ${success} successful, ${cached} is cached, ${total - success} failed`);
+          await rclient.zremAsync(args)
+
+          // add failed ip back into discover queue
+          const ipsFail = result.filter(o => !o.intel);
+          log.debug("Failed IP list:", ipsFail, {});
+          ipsFail.forEach(o => this.appendNewIP(o.ip));
+        } else {
+          // log.info("No IP Addresses are pending for intels");
         }
-
-        const total = ips.length;
-        const cached = ipsWithIntel.filter(o => o.intel.cached).length;
-        const success = ipsWithIntel.length;
-
-        log.debug(`Analyzed ${total} IP Addresses for intels, ${success} successful, ${cached} is cached, ${total - success} failed`);
-        await rclient.zremAsync(args)
-
-        // add failed ip back into discover queue
-        const ipsFail = result.filter(o => !o.intel);
-        log.debug("Failed IP list:", ipsFail, {});
-        ipsFail.forEach(o => this.appendNewIP(o.ip));
-
-      } else {
-        // log.info("No IP Addresses are pending for intels");
+      } catch(err) {
+        log.error("Got error when handling new dest IP addresses, err:", err)
       }
 
       await delay(1000); // sleep for only 1 second
 
-      return this.job();
+      return this.job(); // continuously running
     })();
   }
 
