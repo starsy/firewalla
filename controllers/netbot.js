@@ -581,15 +581,8 @@ class netBot extends ControllerBot {
             data.alarmID = msg.alarmID;
           }
 
-          switch(msg.alarmNotifType) {
-            case "security":
-              notifMsg.title = i18n.__("SECURITY_ALERT");
-              break;
-            case "activity":
-              notifMsg.title = i18n.__("ACTIVITY_ALERT");
-              break;
-            default:
-              break;
+          if(msg.alarmNotifType) {
+            notifMsg.title = i18n.__(msg.alarmNotifType);
           }
 
           if (msg.autoblock) {
@@ -602,7 +595,10 @@ class netBot extends ControllerBot {
           async(() => {
             let flag = await (rclient.hgetAsync("sys:config", "includeNameInNotification"))
             if(flag) {
-              notifMsg.body = `[${this.getDeviceName()}] ${notifMsg.body}`
+              notifMsg.title = `[${this.getDeviceName()}] ${notifMsg.title}`
+            }
+            if(msg["testing"] && msg["testing"] == 1) {
+              notifMsg.title = `[Monkey] ${notifMsg.title}`;
             }
             this.tx2(this.primarygid, "test", notifMsg, data);            
           })()
@@ -642,7 +638,11 @@ class netBot extends ControllerBot {
           }
 
         } else {
-          if (sysManager.systemRebootedDueToIssue(true) == false) {
+          if (sysManager.systemRebootedByUser(true)) {
+            if (nm.canNotify() == true) {
+              this.tx(this.primarygid, "200", "Firewalla reboot completed.");
+            }
+          } else if (sysManager.systemRebootedDueToIssue(true) == false) {
             if (nm.canNotify() == true) {
               this.tx(this.primarygid, "200", "🔥 Firewalla Device '" + this.getDeviceName() + "' Awakens!");
             }
@@ -743,6 +743,39 @@ class netBot extends ControllerBot {
              this.tx2(this.primarygid, "", notifyMsg, data)
            }
            break;
+          case "DNS:Down":
+          if (msg) {
+            const notifyMsg = {
+              title: "DNS status check failed!",
+              body: `DNS status check has failed ${msg} consecutive times.`
+            }
+            const data = {
+              gid: this.primarygid,
+            };
+            this.tx2(this.primarygid, "", notifyMsg, data)
+          }
+          break;
+          case "APP:NOTIFY":
+          try {
+            const jsonMessage = JSON.parse(msg);
+
+            if (jsonMessage && jsonMessage.title && jsonMessage.body) {
+              const title = `[${this.getDeviceName()}] ${jsonMessage.title}`;
+              const body = jsonMessage.body;
+
+              const notifyMsg = {
+                title: title,
+                body: body
+              }
+              const data = {
+                gid: this.primarygid,
+              };
+              this.tx2(this.primarygid, "", notifyMsg, data)
+            }
+          } catch(err) {
+            log.error("Failed to parse app notify message:", msg, err);
+          }       
+          break;   
        }
     });
     sclient.subscribe("System:Upgrade:Hard");
@@ -750,7 +783,7 @@ class netBot extends ControllerBot {
     sclient.subscribe("SS:DOWN")
     sclient.subscribe("SS:FAILOVER")
     sclient.subscribe("SS:START:FAILED")
-
+    sclient.subscribe("APP:NOTIFY");
 
   }
 
@@ -1360,6 +1393,35 @@ class netBot extends ControllerBot {
           .then((alarm) => this.simpleTxData(msg, alarm, null, callback))
           .catch((err) => this.simpleTxData(msg, null, err, callback));
         break;
+      case "alarmDetail": {
+        const alarmID = msg.data.value.alarmID;
+        (async () => {
+          if(alarmID) {
+            let detail = await am2.getAlarmDetail(alarmID); 
+            detail = detail || {}; // return empty {} if no extended alarm detail;
+            
+            this.simpleTxData(msg, detail, null, callback);  
+          } else {
+            this.simpleTxData(msg, {}, new Error("Missing alarm ID"), callback);
+          }
+        })().catch((err) => this.simpleTxData(msg, null, err, callback));
+        break;
+      }
+      case "transferTrend": {
+        const deviceMac = msg.data.value.deviceMac;
+        const destIP = msg.data.value.destIP;
+        (async () => {
+          if(destIP && deviceMac) {
+            const transfers = await flowTool.getTransferTrend(deviceMac, destIP);
+            this.simpleTxData(msg, transfers, null, callback); 
+          } else {
+            this.simpleTxData(msg, {}, new Error("Missing device MAC or destination IP"), callback);
+          }
+        })().catch((err) => {
+          this.simpleTxData(msg, null, err, callback)
+        })
+        break;
+      }
       case "archivedAlarms":
         const offset = msg.data.value && msg.data.value.offset
         const limit = msg.data.value && msg.data.value.limit
@@ -1518,7 +1580,7 @@ class netBot extends ControllerBot {
       case "whois":
         (async () => {
           const target = msg.data.value.target;
-          let whois = intelManager.whois(target);
+          let whois = await intelManager.whois(target);
           this.simpleTxData(msg, {target, whois}, null, callback);
         })().catch((err) => {
           this.simpleTxData(msg, {}, err, callback);
@@ -1870,7 +1932,12 @@ class netBot extends ControllerBot {
    */
 
   cmdHandler(gid, msg, callback) {
-    log.info("API: CmdHandler ",gid,msg,{});
+
+    if(msg && msg.data && msg.data.item === 'ping') {
+
+      } else {
+        log.info("API: CmdHandler ",gid,msg,{});
+      }
     if (msg.data.item === "reset") {
       log.info("System Reset");
       DeviceMgmtTool.resetDevice()
@@ -2436,7 +2503,8 @@ class netBot extends ControllerBot {
         sem.emitEvent({
           type: "ReleaseMonkey",
           message: "Release a monkey to test system",
-          toProcess: 'FireMain'
+          toProcess: 'FireMain',
+          monkeyType: msg.data.value && msg.data.value.monkeyType
         })
         this.simpleTxData(msg, {}, null, callback)
       })().catch((err) => {
@@ -2652,7 +2720,13 @@ class netBot extends ControllerBot {
       }
 
       let msg = rawmsg.message.obj;
-      log.info("Received jsondata from app", rawmsg.message, {});
+      if(rawmsg.message && rawmsg.message.obj && rawmsg.message.obj.data &&
+      rawmsg.message.obj.data.item === 'ping') {
+
+      } else {
+        log.info("Received jsondata from app", rawmsg.message, {});
+      }
+      
       if (rawmsg.message.obj.type === "jsonmsg") {
         if (rawmsg.message.obj.mtype === "init") {
 
@@ -2804,7 +2878,10 @@ process.on('uncaughtException', (err) => {
     stack: err.stack
   }, null);
   setTimeout(() => {
-    require('child_process').execSync("touch /home/pi/.firewalla/managed_reboot")    
+    try {
+        require('child_process').execSync("touch /home/pi/.firewalla/managed_reboot")    
+    } catch(e) {
+    }
     process.exit(1);
   }, 1000 * 20); // just ensure fire api lives long enough to upgrade itself if available
 });

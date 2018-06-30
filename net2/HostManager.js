@@ -523,7 +523,7 @@ class Host {
               rclient.hsetAsync("host:mac:" + this.o.mac, 'spoofing', true)
                 .catch(err => log.error("Unable to set spoofing in redis", err))
                 .then(() => this.dnsmasq.onSpoofChanged());
-              log.info("Started spoofing", this.o.ipv4Addr, this.o.mac, this.o.name);
+              log.debug("Started spoofing", this.o.ipv4Addr, this.o.mac, this.o.name);
               this.spoofing = true;
             }).catch((err) => {
             log.error("Failed to spoof", this.o.ipv4Addr, this.o.mac, this.o.name);
@@ -534,7 +534,7 @@ class Host {
               rclient.hsetAsync("host:mac:" + this.o.mac, 'spoofing', false)
                 .catch(err => log.error("Unable to set spoofing in redis", err))
                 .then(() => this.dnsmasq.onSpoofChanged());
-              log.info("Stopped spoofing", this.o.ipv4Addr, this.o.mac, this.o.name);
+              log.debug("Stopped spoofing", this.o.ipv4Addr, this.o.mac, this.o.name);
               this.spoofing = false;
             }).catch((err) => {
             log.error("Failed to unspoof", this.o.ipv4Addr, this.o.mac, this.o.name);
@@ -2483,7 +2483,10 @@ module.exports = class HostManager {
         let key = "policy:system";
         let d = {};
         for (let k in this.policy) {
-            d[k] = JSON.stringify(this.policy[k]);
+          const policyValue = this.policy[k];
+          if(policyValue !== undefined) {
+            d[k] = JSON.stringify(policyValue)
+          }
         }
         rclient.hmset(key, d, (err, data) => {
             if (err != null) {
@@ -2507,7 +2510,11 @@ module.exports = class HostManager {
                 if (data) {
                     this.policy = {};
                     for (let k in data) {
+                      try {
                         this.policy[k] = JSON.parse(data[k]);
+                      } catch (err) {
+                        log.error(`Failed to parse policy ${k} with value ${data[k]}`, err)
+                      }                       
                     }
                     if (callback)
                         callback(null, data);

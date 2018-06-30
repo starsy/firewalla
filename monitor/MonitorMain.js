@@ -18,8 +18,13 @@ require('events').EventEmitter.prototype._maxListeners = 100;
 
 let log = require("../net2/logger.js")(__filename, "info");
 
+const sem = require('../sensor/SensorEventManager.js').getInstance();
+
 var bone = require("../lib/Bone.js");
 var config = JSON.parse(require('fs').readFileSync('../net2/config.json', 'utf8'));
+
+const fs = require('fs');
+
 log.info("================================================================================");
 log.info("Monitor Starting:",config.version);
 log.info("================================================================================");
@@ -44,10 +49,11 @@ function run0() {
       sysManager.isConfigInitialized()) {
     run();
   } else {
+    log.forceInfo("Waiting for first app to connect...");
     setTimeout(()=>{
       sysManager.update(null);
       run0();
-    },1000);
+    },3000);
   }
 }
 
@@ -59,7 +65,10 @@ process.on('uncaughtException',(err)=>{
     }
     bone.log("error",{version:config.version,type:'FIREWALLA.MON.exception',msg:err.message,stack:err.stack},null);
     setTimeout(()=>{
-        require('child_process').execSync("touch /home/pi/.firewalla/managed_reboot")
+        try {
+            require('child_process').execSync("touch /home/pi/.firewalla/managed_reboot")
+        } catch(e) {
+        }
         process.exit(1);
     },1000*2);
 });
@@ -100,6 +109,18 @@ function setStatus(type, opts) {
   Object.assign(type, opts);
 }
 
+function updateTouchFile() {
+  const monitorTouchFile = "/dev/shm/monitor.touch";
+
+  fs.open(monitorTouchFile, 'w', (err, fd) => {
+    if(!err) {
+      fs.close(fd, (err2) => {
+
+      })
+    }
+  })
+}
+
 function run() {
   const firewallaConfig = require('../net2/config.js').getConfig();
   sysManager.setConfig(firewallaConfig) // update sys config when start
@@ -111,7 +132,7 @@ function run() {
   // heapSensor = new HeapSensor();
   // heapSensor.run();
   
-  const tick = 60 * 15; // waking up every 5 min
+  const tick = 60 * 15; // waking up every 15 min
   const monitorWindow = 60 * 60 * 4; // eight hours window
   
   const FlowMonitor = require('./FlowMonitor.js');
@@ -126,6 +147,9 @@ function run() {
   setInterval(() => {
     const type = 'dlp';
     const _status = status[type];
+    
+    updateTouchFile();
+
     setTimeout(() => {
       if (_status.running && _status.runBy !== 'signal') {
         log.error("DLP Timeout", status);
@@ -151,6 +175,9 @@ function run() {
   setInterval(() => {
     const type = 'detect';
     const _status = status[type];
+
+    updateTouchFile();
+
     setTimeout(() => {
       if (_status.running && _status.runBy !== 'signal') {
         log.error("Last Detection Timeout", status);
@@ -206,4 +233,11 @@ function run() {
       gc();
     });
   });
+
 }
+
+sem.on("ChangeLogLevel", (event) => {
+  if(event.name && event.level) {
+    require('../net2/LoggerManager.js').setLogLevel(event.name, event.level);
+  }
+});

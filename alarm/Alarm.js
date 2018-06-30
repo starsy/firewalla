@@ -29,7 +29,7 @@ class Alarm {
 //    this.payloads = payloads;
     this.alarmTimestamp = new Date() / 1000;
     this.timestamp = timestamp;
-    this.notifType = "security"; // default security
+    this.notifType = `NOTIF_TITLE_${this.type}`; // default security
     if(info)
       extend(this, info);
 
@@ -64,7 +64,7 @@ class Alarm {
     if(this.timestamp)
       //this.localizedRelativeTime = moment(parseFloat(this.timestamp) * 1000).fromNow();
       this.localizedRelativeTime = "%@"; // will be fullfilled @ ios side
-
+    
     return i18n.__(this.getInfoCategory(), this);
   }
 
@@ -170,8 +170,51 @@ class BroNoticeAlarm extends Alarm {
   requiredKeys() {
     return [];
   }
+
+  getI18NCategory() {
+    let category = this.type;
+
+    const supportedNoticeTypes = ["Heartbleed::SSL_Heartbeat_Attack"];
+    if(supportedNoticeTypes.includes(this["p.noticeType"])) {
+      category = `${category}_${this["p.noticeType"]}`;
+    }
+
+    if("p.local_is_client" in this) {
+      if(this["p.local_is_client"] === "1") {
+        category = `${category}_OUTBOUND`;
+      } else {
+        category = `${category}_INBOUND`;
+      }
+    }
+
+    if(this.result === "block" &&
+    this.result_method === "auto") {
+      category = `${category}_AUTOBLOCK`;
+    }
+    
+    return category;
+  }
 }
 
+class IntelReportAlarm extends Alarm {
+  constructor(timestamp, device, info) {
+    super("ALARM_INTEL_REPORT", timestamp, device, info);
+  }
+  
+  getI18NCategory() {
+    return "ALARM_INTEL_REPORT";
+
+    if(Number(this["p.attempts"]) === 1) {
+      return "ALARM_INTEL_REPORT";
+    } else {
+      return "ALARM_INTEL_REPORT_N";
+    }
+  }
+
+  requiredKeys() {
+    return [];
+  }
+}
 class IntelAlarm extends Alarm {
   constructor(timestamp, device, severity, info) {
     super("ALARM_INTEL", timestamp, device, info);
@@ -288,6 +331,43 @@ class OutboundAlarm extends Alarm {
   keysToCompareForDedup() {
     return ["p.device.mac", "p.dest.id"];
   }
+
+  isDup(alarm) {
+    let alarm2 = this;
+    
+    if(alarm.type !== alarm2.type) {
+      return false;
+    }
+
+    const macKey = "p.device.mac";
+    const destDomainKey = "p.dest.domain";
+    const destNameKey = "p.dest.id";
+    
+    // Mac
+    if(!alarm[macKey] || 
+    !alarm2[macKey] || 
+    alarm[macKey] !== alarm2[macKey]) {
+      return false;
+    }
+
+    // now these two alarms have same device MAC
+
+    // Destination
+    if(destDomainKey in alarm && 
+      destDomainKey in alarm2 &&
+      alarm[destDomainKey] === alarm2[destDomainKey]) {
+      return true;
+    }
+
+
+    if(!alarm[destNameKey] || 
+    !alarm2[destNameKey] || 
+    alarm[destNameKey] !== alarm2[destNameKey]) {
+      return false;
+    }
+
+    return true;
+  }
 }
 
 
@@ -334,7 +414,6 @@ class VideoAlarm extends OutboundAlarm {
   constructor(timestamp, device, videoID, info) {
     super("ALARM_VIDEO", timestamp, device, videoID, info);
     this["p.showMap"] = false;
-    this.notifType = "activity";
   }
 }
 
@@ -342,8 +421,6 @@ class GameAlarm extends OutboundAlarm {
   constructor(timestamp, device, gameID, info) {
     super("ALARM_GAME", timestamp, device, gameID, info);
     this["p.showMap"] = false;
-    this.notifType = "activity";
-
   }
 }
 
@@ -351,7 +428,6 @@ class PornAlarm extends OutboundAlarm {
   constructor(timestamp, device, pornID, info) {
     super("ALARM_PORN", timestamp, device, pornID, info);
     this["p.showMap"] = false;
-    this.notifType = "activity";
   }
 }
 
@@ -363,7 +439,8 @@ let classMapping = {
   ALARM_NEW_DEVICE: NewDeviceAlarm.prototype,
   ALARM_BRO_NOTICE: BroNoticeAlarm.prototype,
   ALARM_INTEL: IntelAlarm.prototype,
-  ALARM_VULNERABILITY: VulnerabilityAlarm.prototype
+  ALARM_VULNERABILITY: VulnerabilityAlarm.prototype,
+  ALARM_INTEL_REPORT: IntelReportAlarm.prototype
 }
 
 module.exports = {
@@ -377,5 +454,6 @@ module.exports = {
   BroNoticeAlarm: BroNoticeAlarm,
   IntelAlarm: IntelAlarm,
   VulnerabilityAlarm: VulnerabilityAlarm,
+  IntelReportAlarm: IntelReportAlarm,
   mapping: classMapping
 }

@@ -30,6 +30,20 @@ log.info("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 const async = require('asyncawait/async');
 const await = require('asyncawait/await');
 
+const fs = require('fs');
+
+function updateTouchFile() {
+  const mainTouchFile = "/dev/shm/main.touch";
+
+  fs.open(mainTouchFile, 'w', (err, fd) => {
+    if(!err) {
+      fs.close(fd, (err2) => {
+
+      })
+    }
+  })
+}
+
 let bone = require("../lib/Bone.js");
 
 let firewalla = require("./Firewalla.js");
@@ -41,7 +55,6 @@ let mode = require('./Mode.js')
 // api/main/monitor all depends on sysManager configuration
 var SysManager = require('./SysManager.js');
 var sysManager = new SysManager('info');
-var fs = require('fs');
 var config = JSON.parse(fs.readFileSync(`${__dirname}/config.json`, 'utf8'));
 
 let BoneSensor = require('../sensor/BoneSensor');
@@ -72,7 +85,7 @@ function run0() {
     if(!bone.cloudready()) {
       log.info("Connecting to Firewalla Cloud...");
     } else if(!bone.isAppConnected()) {
-      log.info("Waiting for first app to connect...");
+      log.forceInfo("Waiting for first app to connect...");
     } else if(!sysManager.isConfigInitialized()) {
       log.info("Waiting for configuration setup...");
     }
@@ -80,7 +93,7 @@ function run0() {
     setTimeout(()=>{
       sysManager.update(null);
       run0();
-    },1000);
+    },3000);
   }
 }
 
@@ -93,7 +106,10 @@ process.on('uncaughtException',(err)=>{
   }
   bone.log("error",{version:config.version,type:'FIREWALLA.MAIN.exception',msg:err.message,stack:err.stack},null);
   setTimeout(()=>{
-    require('child_process').execSync("touch /home/pi/.firewalla/managed_reboot")
+    try {
+      require('child_process').execSync("touch /home/pi/.firewalla/managed_reboot")
+    } catch(e) {
+    }
     process.exit(1);
   },1000*5);
 });
@@ -286,6 +302,8 @@ function run() {
 
   },1000*2);
 
+  updateTouchFile();
+  
   setInterval(()=>{
     let memoryUsage = Math.floor(process.memoryUsage().rss / 1000000);
     try {
@@ -295,6 +313,9 @@ function run() {
       }
     } catch(e) {
     }
+    
+    updateTouchFile();
+
   },1000*60*5);
 
   setInterval(()=>{
@@ -376,4 +397,11 @@ function run() {
       disableFireBlue()
     }
   })
+
 }
+
+sem.on("ChangeLogLevel", (event) => {
+  if(event.name && event.level) {
+    require('./LoggerManager.js').setLogLevel(event.name, event.level);
+  }
+});

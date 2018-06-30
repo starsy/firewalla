@@ -76,7 +76,7 @@ module.exports = class {
       result = null;
     }
 
-    log.info("Cache lookup for", ip, ", origin", origin, ", result:", result);
+    log.debug("Cache lookup for", ip, ", origin", origin, ", result:", result);
     return result;
   }
 
@@ -87,7 +87,7 @@ module.exports = class {
 
     let key = "cache.intel:" + origin + ":" + ip;
 
-    log.info("Add into cache.intel, key:", key, ", value:", value);
+    log.debug("Add into cache.intel, key:", key, ", value:", value);
 
     return rclient.setAsync(key, value)
       .then(result => rclient.expireatAsync(key, this.currentTime() + A_WEEK))
@@ -133,6 +133,11 @@ module.exports = class {
       }
     }
 
+    if(intelObj.category === 'intel' && intelObj.s && Number(intelObj.s) === 0) {
+      log.info("Intel ignored, severity score is zero", intelObj);
+      return;
+    }
+
     if (!intelObj.lobj) {
       intelObj.lobj = await this.ipinfo(ip);
     }
@@ -157,20 +162,19 @@ module.exports = class {
       return;
     }
 
-    let [intelObj, ipinfo, whois] = await Promise.all([this.cymon(ip), this.ipinfo(ip), this.whois(ip)]);
+    let [intelObj, ipinfo] = await Promise.all([this.cymon(ip), this.ipinfo(ip)]);
     
-    if (!intelObj) {
+    if (!intelObj || intelObj.count === 0) { // no info from cymon
       intelObj = {};
-    } else {
-      intelObj.whois = whois;
       intelObj = this.addFlowIntel(ip, intelObj, flowIntel);
-      intelObj = this.summarizeIntelObj(ip, intelObj);  
+    } else {
+      intelObj = this.summarizeIntelObj(ip, intelObj);  ;
     }
 
-    log.info("Ipinfo:", ipinfo);
+    log.debug("Ipinfo:", ipinfo)
     intelObj.lobj = ipinfo;
 
-    log.info("IntelObj:", intelObj);
+    log.debug("IntelObj:", intelObj);
 
     return intelObj;
   }
@@ -266,7 +270,7 @@ module.exports = class {
 
   addFlowIntel(ip, intelObj, intel) {
     let weburl = "https://intel.firewalla.com/";
-    log.info("IntelManger:addFlowIntel:", ip, intel);
+    log.debug("IntelManger:addFlowIntel:", ip, intel);
     if (intel == null) {
       return null;
     }
@@ -288,7 +292,7 @@ module.exports = class {
       } catch (e) {
       }
     }
-    log.info("IntelManger:addFlowIntel:Done", ip);
+    log.debug("IntelManger:addFlowIntel:Done", ip);
     return intelObj;
   }
 
